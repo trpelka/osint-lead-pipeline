@@ -55,7 +55,7 @@ Open the notebook in Google Colab — scrapes targets, runs the API, executes al
 ```
 cd app
 pip install fastapi uvicorn pydantic pytest httpx
-pytest test_main.py -v
+pytest -v
 ```
 
 11 tests — CRUD, validation, duplicates, pagination, error handling.
