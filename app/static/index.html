@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OSINT Lead Pipeline</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 40px auto;
+            padding: 0 20px;
+            background: #f5f7fa;
+            color: #222;
+        }
+
+        h1 {
+            margin-bottom: 5px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: white;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px #0001;
+        }
+
+        input {
+            padding: 10px;
+            margin-right: 8px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+
+        button {
+            padding: 10px 16px;
+            border: 0;
+            border-radius: 5px;
+            background: #2563eb;
+            color: white;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #1d4ed8;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background: #f0f2f5;
+        }
+
+        .stats {
+            font-size: 28px;
+            font-weight: bold;
+        }
+
+        #message {
+            margin-top: 15px;
+            color: #555;
+        }
+    </style>
+</head>
+
+<body>
+
+<h1>OSINT Lead Pipeline</h1>
+<div class="subtitle">
+    Company discovery, email extraction and lead management
+</div>
+
+<div class="card">
+
+    <h2>Scrape a domain</h2>
+
+    <input
+        id="domain"
+        placeholder="example.com"
+    >
+
+    <button onclick="scrapeDomain()">
+        Scrape
+    </button>
+
+    <div id="message"></div>
+
+</div>
+
+
+<div class="card">
+
+    <h2>Statistics</h2>
+
+    <div class="stats" id="total">
+        0
+    </div>
+
+    leads
+
+</div>
+
+
+<div class="card">
+
+    <h2>Leads</h2>
+
+    <input
+        id="search"
+        placeholder="Search company or domain"
+        oninput="loadLeads()"
+    >
+
+    <br><br>
+
+    <table>
+
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Company</th>
+                <th>Domain</th>
+                <th>Email</th>
+                <th>Notes</th>
+            </tr>
+        </thead>
+
+        <tbody id="leads"></tbody>
+
+    </table>
+
+</div>
+
+
+<script>
+
+async function loadLeads() {
+
+    const search =
+        document.getElementById("search").value;
+
+    let url = "/api/leads";
+
+    if (search) {
+        url += "?search=" +
+            encodeURIComponent(search);
+    }
+
+    const response =
+        await fetch(url);
+
+    const leads =
+        await response.json();
+
+    const table =
+        document.getElementById("leads");
+
+    table.innerHTML = "";
+
+    leads.forEach(lead => {
+
+        const row =
+            document.createElement("tr");
+
+        row.innerHTML = `
+            <td>${lead.id}</td>
+            <td>${escapeHtml(lead.company)}</td>
+            <td>${escapeHtml(lead.domain)}</td>
+            <td>${escapeHtml(lead.email)}</td>
+            <td>${escapeHtml(lead.notes || "")}</td>
+        `;
+
+        table.appendChild(row);
+    });
+
+    loadStats();
+}
+
+
+async function loadStats() {
+
+    const response =
+        await fetch("/api/stats");
+
+    const data =
+        await response.json();
+
+    document.getElementById("total")
+        .textContent = data.total_leads;
+}
+
+
+async function scrapeDomain() {
+
+    const input =
+        document.getElementById("domain");
+
+    const domain =
+        input.value.trim();
+
+    if (!domain) {
+        return;
+    }
+
+    const message =
+        document.getElementById("message");
+
+    message.textContent =
+        "Scraping...";
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/scrape/" +
+                encodeURIComponent(domain)
+            );
+
+        const data =
+            await response.json();
+
+        if (!response.ok) {
+            throw new Error(
+                data.detail || "Scraping failed"
+            );
+        }
+
+        message.textContent =
+            `Found email: ${data.email}`;
+
+        await createLead(
+            domain,
+            data.email
+        );
+
+    } catch (error) {
+
+        message.textContent =
+            "Error: " + error.message;
+    }
+}
+
+
+async function createLead(domain, email) {
+
+    const company =
+        domain
+            .replace(/^www\./, "")
+            .split(".")[0];
+
+    const response =
+        await fetch("/api/leads", {
+
+            method: "POST",
+
+            headers: {
+                "Content-Type":
+                    "application/json"
+            },
+
+            body: JSON.stringify({
+                company: company,
+                domain: domain,
+                email: email,
+                notes: "Collected by OSINT scraper"
+            })
+        });
+
+    if (response.status === 409) {
+
+        document.getElementById("message")
+            .textContent =
+            "Lead already exists.";
+
+    } else if (response.ok) {
+
+        document.getElementById("message")
+            .textContent =
+            "Lead scraped and saved.";
+
+    } else {
+
+        const data =
+            await response.json();
+
+        throw new Error(
+            data.detail || "Could not save lead"
+        );
+    }
+
+    loadLeads();
+}
+
+
+function escapeHtml(value) {
+
+    return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
+
+
+loadLeads();
+
+</script>
+
+</body>
+</html>
