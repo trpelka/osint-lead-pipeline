@@ -3,3 +3,5 @@ __pycache__/
 .pytest_cache/
 leads.db
 .env
+
+frontend/node_modules/
