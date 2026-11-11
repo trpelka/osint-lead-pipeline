@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import "./App.css";
 
-const API_BASE =
-  "https://crispy-goggles-g44pwjvpqw4v364v-8000.app.github.dev";
+const API_BASE: string =
+  import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
 
 type Lead = {
   id: number;
@@ -14,6 +14,7 @@ type Lead = {
 
 export default function App() {
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -22,23 +23,28 @@ export default function App() {
       setLoading(true);
       setError("");
 
-      const response = await fetch(
-        API_BASE + "/api/leads?limit=100"
-      );
+      const [leadsResponse, statsResponse] = await Promise.all([
+        fetch(API_BASE + "/api/leads?limit=100"),
+        fetch(API_BASE + "/api/stats"),
+      ]);
 
-      if (!response.ok) {
+      if (!leadsResponse.ok || !statsResponse.ok) {
         throw new Error(
-          "API returned HTTP " + response.status
+          "API returned HTTP " +
+            leadsResponse.status +
+            " / " +
+            statsResponse.status
         );
       }
 
-      const data = await response.json();
+      const data = await leadsResponse.json();
+      const stats = await statsResponse.json();
+
       setLeads(data);
+      setTotal(stats.total_leads);
     } catch (err) {
       console.error(err);
-      setError(
-        "Could not connect to the Codespaces API."
-      );
+      setError("Could not reach the API at " + API_BASE + ".");
     } finally {
       setLoading(false);
     }
@@ -60,8 +66,8 @@ export default function App() {
 
       <section className="card">
         <h2>Statistics</h2>
-        <strong>{leads.length}</strong>
-        <span> leads</span>
+        <strong>{total}</strong>
+        <span> leads stored</span>
       </section>
 
       <section className="card">
