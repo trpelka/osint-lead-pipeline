@@ -1,5 +1,3 @@
-fastapi
-uvicorn
-pydantic
-httpx
-pytest
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+pydantic>=2.7,<3
