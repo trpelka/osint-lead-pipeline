@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from app import main
 from app.main import app
 
-client = TestClient(app)
+client = TestClient(app, headers={"X-API-Key": "test-key"})
 
 LEAD = {
     "company": "Test Company",
@@ -133,10 +133,32 @@ def test_scrape_returns_the_first_email_in_sorted_order(monkeypatch):
     assert response.json() == {
         "domain": "example.com",
         "email": "info@example.com",
+        "status": "found",
     }
 
 
-def test_scrape_falls_back_when_the_homepage_cannot_be_fetched(monkeypatch):
+def test_scrape_does_not_invent_an_address_when_none_is_published(monkeypatch):
+    monkeypatch.setattr(main, "resolve_public_addresses", lambda domain: [])
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, size):
+            return b"<html>no contact details here</html>"
+
+    class FakeOpener:
+        def open(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(main.urllib.request, "build_opener", lambda handler: FakeOpener())
+    assert client.get("/api/scrape/example.com").status_code == 404
+
+
+def test_scrape_reports_fetch_failure_instead_of_guessing(monkeypatch):
     monkeypatch.setattr(main, "resolve_public_addresses", lambda domain: [])
 
     class FailingOpener:
@@ -147,8 +169,13 @@ def test_scrape_falls_back_when_the_homepage_cannot_be_fetched(monkeypatch):
         main.urllib.request, "build_opener", lambda handler: FailingOpener()
     )
     response = client.get("/api/scrape/example.com")
-    assert response.status_code == 200
-    assert response.json() == {
-        "domain": "example.com",
-        "email": "contact@example.com",
-    }
+    assert response.status_code == 502
+    assert response.json()["detail"] == "homepage could not be fetched"
+
+
+def test_mutations_require_the_api_key():
+    anonymous = TestClient(app)
+    assert anonymous.post("/api/leads", json=LEAD).status_code == 401
+    assert anonymous.get("/api/scrape/example.com").status_code == 401
+    # Reads stay public so the dashboard keeps working.
+    assert anonymous.get("/api/leads").status_code == 200
