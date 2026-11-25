@@ -60,11 +60,16 @@ Browser dashboard          React UI (optional)
 | PATCH | `/api/leads/{id}` | Update `company`, `email` or `notes` |
 | DELETE | `/api/leads/{id}` | Delete a lead |
 | GET | `/api/stats` | Return the number of stored leads |
-| GET | `/api/scrape/{domain}` | Try to read a public email from a homepage |
+| GET | `/api/scrape/{domain}` | Try to read a public email from a homepage (requires the API key) |
 | GET | `/docs` | Interactive API documentation |
 
 `POST /api/leads` returns `409` when the domain already exists and `422` for an
 invalid email or domain. Missing leads return `404`.
+
+Set `LEADS_API_KEY` to require the `X-API-Key` header on all writes and on the
+scraper; reads and the dashboard stay public. Set `CORS_ORIGINS` to a
+comma-separated allowlist to enable cross-origin requests — the default is no
+cross-origin access.
 
 ## Running locally
 
@@ -168,8 +173,10 @@ osint-lead-pipeline/
 ## Scraper
 
 `GET /api/scrape/{domain}` requests `https://<domain>`, reads at most 512 KB of
-HTML and returns the first email address in sorted order. If no address is
-found, or the request fails, it returns `contact@<domain>`.
+HTML and returns the first email address in sorted order. It never invents one:
+no published address is `404`, an unreachable homepage is `502`, and a success
+returns `{"domain": ..., "email": ..., "status": "found"}`. A guessed
+`contact@domain` would look like evidence while being fiction.
 
 Guards:
 
@@ -187,8 +194,7 @@ authentication and egress filtering.
 
 ## Current limitations
 
-- No authentication or authorization
-- CORS is open to all origins
+- Authentication is optional: set `LEADS_API_KEY` before exposing the service
 - Homepage HTML only; no crawling and no email verification
 - SQLite rather than PostgreSQL
 - No background job processing or retries
