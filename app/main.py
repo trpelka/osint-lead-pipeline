@@ -5,24 +5,43 @@ import socket
 import sqlite3
 import urllib.error
 import urllib.request
+from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, field_validator
 
-
-app = FastAPI(title="OSINT Lead Pipeline")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 DB_PATH = os.getenv("LEADS_DB", "leads.db")
+API_KEY = os.getenv("LEADS_API_KEY", "").strip()
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    # Initialise at startup, not at import: importing a module must not write to
+    # a database (it breaks tests, workers and any tool that just reads the code).
+    init_db()
+    yield
+
+
+app = FastAPI(title="OSINT Lead Pipeline", lifespan=lifespan)
+
+if CORS_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=CORS_ORIGINS,
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_headers=["Content-Type", "X-API-Key"],
+    )
+
+
+def require_key(x_api_key: Optional[str] = Header(default=None)):
+    """Mutating and scraping endpoints are guarded when a key is configured."""
+    if API_KEY and x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 # Public DNS hostname only: no scheme, port, path, IP literal or localhost.
 DOMAIN_PATTERN = re.compile(
@@ -63,9 +82,6 @@ def init_db():
 
     conn.commit()
     conn.close()
-
-
-init_db()
 
 
 class LeadCreate(BaseModel):
@@ -163,7 +179,8 @@ def get_lead(lead_id: int):
     return dict(row)
 
 
-@app.post("/api/leads", response_model=LeadOut, status_code=201)
+@app.post("/api/leads", response_model=LeadOut, status_code=201,
+          dependencies=[Depends(require_key)])
 def create_lead(lead: LeadCreate):
     conn = get_db()
 
@@ -200,7 +217,8 @@ def create_lead(lead: LeadCreate):
         conn.close()
 
 
-@app.patch("/api/leads/{lead_id}", response_model=LeadOut)
+@app.patch("/api/leads/{lead_id}", response_model=LeadOut,
+           dependencies=[Depends(require_key)])
 def update_lead(lead_id: int, lead: LeadUpdate):
     conn = get_db()
 
@@ -243,7 +261,8 @@ def update_lead(lead_id: int, lead: LeadUpdate):
     return dict(row)
 
 
-@app.delete("/api/leads/{lead_id}", status_code=204)
+@app.delete("/api/leads/{lead_id}", status_code=204,
+            dependencies=[Depends(require_key)])
 def delete_lead(lead_id: int):
     conn = get_db()
 
@@ -308,12 +327,11 @@ def resolve_public_addresses(domain: str):
 def scrape_email(domain: str) -> str:
     """Fetch a public homepage and return the first e-mail address found.
 
-    The endpoint accepts a bare public hostname only: no scheme, port, path or
-    IP literal. The hostname is resolved before the request and rejected when
-    any resolved address is not globally routable, redirects are not followed,
-    and at most 512 KB of HTML is read. This is a best-effort guard, not a
-    complete SSRF defence: DNS can still change between the check and the
-    request.
+    Never invent an address. A guessed `contact@domain` looks like evidence to
+    a reader but is not, so a failed scrape is an explicit 404/502 instead.
+    The SSRF guards below are best-effort: DNS can change between resolution
+    and the request, so do not expose this to untrusted users without egress
+    filtering and authentication.
     """
     try:
         domain = valid_domain(domain)
@@ -326,34 +344,27 @@ def scrape_email(domain: str) -> str:
             f"https://{domain}",
             headers={"User-Agent": "Mozilla/5.0"},
         )
-
         opener = urllib.request.build_opener(_NoRedirect)
-
         with opener.open(request, timeout=5) as response:
             html = response.read(MAX_HTML_BYTES).decode(errors="ignore")
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        raise HTTPException(status_code=502, detail="homepage could not be fetched") from exc
 
-        emails = sorted(
-            set(
-                re.findall(
-                    r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}",
-                    html,
-                )
-            )
-        )
-
-        return emails[0] if emails else f"contact@{domain}"
-
-    except Exception:
-        return f"contact@{domain}"
+    emails = sorted(set(re.findall(
+        r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", html)))
+    if not emails:
+        raise HTTPException(status_code=404, detail="no public email found")
+    return emails[0]
 
 
-@app.get("/api/scrape/{domain}")
+@app.get("/api/scrape/{domain}", dependencies=[Depends(require_key)])
 def scrape_domain(domain: str):
     email = scrape_email(domain)
 
     return {
         "domain": domain,
         "email": email,
+        "status": "found",
     }
 
 
@@ -368,4 +379,4 @@ def root():
 
 @app.get("/dashboard")
 def dashboard():
-    return FileResponse("app/static/index.html")
+    return FileResponse(Path(__file__).resolve().parent / "static" / "index.html")
